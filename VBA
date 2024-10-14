@@ -1,0 +1,163 @@
+Sub CreatePivotTable()
+
+    Dim wsData As Worksheet
+    Dim wsPivot As Worksheet
+    Dim ptCache As pivotCache
+    Dim pt As pivotTable
+    Dim pivotRange As Range
+    Dim pivotSheetName As String
+    Dim lastRow As Long
+    Dim firstValueRow As Long
+    Dim lastCol As Long ' Declare only once
+    Dim BLUE_COLOR As Long
+
+    ' Define the blue color (Hex #110081)
+    BLUE_COLOR = RGB(17, 0, 129)
+
+    pivotSheetName = "Pivot Summary"
+
+    ' Set the data worksheet
+    Set wsData = ThisWorkbook.Sheets("DataSheet")
+
+    ' Determine the data range dynamically
+    lastRow = wsData.Cells(wsData.Rows.Count, 1).End(xlUp).Row
+    lastCol = wsData.Cells(1, wsData.Columns.Count).End(xlToLeft).Column
+    Set pivotRange = wsData.Cells(1, 1).Resize(lastRow, lastCol)
+
+    ' Check if Pivot Summary exists, if not, create it
+    On Error Resume Next
+    Set wsPivot = ThisWorkbook.Sheets(pivotSheetName)
+    If wsPivot Is Nothing Then
+        Set wsPivot = ThisWorkbook.Sheets.Add
+        wsPivot.Name = pivotSheetName
+    End If
+    On Error GoTo 0
+
+    ' Delete existing pivot table if it exists
+    On Error Resume Next
+    For Each pt In wsPivot.PivotTables
+        pt.TableRange2.Clear
+    Next pt
+    On Error GoTo 0
+
+    ' Create PivotCache from the data
+    Set ptCache = ThisWorkbook.PivotCaches.Create( _
+        SourceType:=xlDatabase, _
+        SourceData:=pivotRange)
+
+    ' Create the PivotTable
+    Set pt = wsPivot.PivotTables.Add( _
+        pivotCache:=ptCache, _
+        TableDestination:=wsPivot.Cells(1, 1), _
+        TableName:="PivotTable1")
+
+    ' Add Filters
+    With pt
+        .PivotFields("system_id").Orientation = xlPageField
+        .PivotFields("facility_entity_id").Orientation = xlPageField
+        .PivotFields("provider_name").Orientation = xlPageField
+        .PivotFields("contract_office").Orientation = xlPageField
+        .PivotFields("line_of_business").Orientation = xlPageField
+        .PivotFields("msc_cd").Orientation = xlPageField
+        .PivotFields("service_major").Orientation = xlPageField
+
+        ' Add Rows
+        .PivotFields("systemname").Orientation = xlRowField
+
+        ' Add Values (Sum of each field)
+        .AddDataField .PivotFields("repriced_claim_count"), "Sum of Repriced Claim Count", xlSum
+        .AddDataField .PivotFields("repriced_allowed_"), "Sum of Repriced Allowed", xlSum
+        .AddDataField .PivotFields("repriced_medicare_allowed"), "Sum of Repriced Medicare Allowed", xlSum
+        .AddDataField .PivotFields("total_allowed"), "Sum of Total Allowed", xlSum
+        .AddDataField .PivotFields("con_office_repr_allowed"), "Sum of Con Office Repr Allowed", xlSum
+        .AddDataField .PivotFields("con_offirce_medicare_allowed"), "Sum of Con Office Medicare Allowed", xlSum
+    End With
+
+    ' Refresh the PivotTable to ensure all data is up to date
+    pt.RefreshTable
+
+    ' Determine the first and last rows of the Pivot Table values
+    firstValueRow = pt.DataBodyRange.Cells(1, 1).Row ' Get the first value row
+    lastRow = pt.DataBodyRange.Cells(pt.DataBodyRange.Rows.Count, 1).Row
+    lastCol = pt.TableRange2.Columns.Count ' Get the last column of the pivot table
+
+    ' Add the two-row headers, setting the value only in the top-left cell
+    With wsPivot
+        .Cells(firstValueRow - 2, pt.TableRange2.Columns.Count + 1).Value = "Percent Dollars Repriced"
+        .Cells(firstValueRow - 2, pt.TableRange2.Columns.Count + 2).Value = "Medicare System Repriced"
+        .Cells(firstValueRow - 2, pt.TableRange2.Columns.Count + 3).Value = "Contract Office Repriced"
+    End With
+
+    ' Merge the header cells and apply formatting
+    For i = 1 To 3
+        With wsPivot.Range( _
+            wsPivot.Cells(firstValueRow - 2, pt.TableRange2.Columns.Count + i), _
+            wsPivot.Cells(firstValueRow - 1, pt.TableRange2.Columns.Count + i))
+            .Merge
+            .Interior.Color = BLUE_COLOR
+            .Font.Color = RGB(255, 255, 255)
+            .HorizontalAlignment = xlCenter
+            .VerticalAlignment = xlCenter
+            .ColumnWidth = 30  ' Set column width to 30 units
+        End With
+    Next i
+
+    ' Add formulas to the new columns starting from the first value row
+    wsPivot.Cells(firstValueRow, pt.TableRange2.Columns.Count + 1).Formula = "=IFERROR(C" & firstValueRow & "/E" & firstValueRow & ", 0)" ' Percent Dollars Repriced (C/E)
+    wsPivot.Cells(firstValueRow, pt.TableRange2.Columns.Count + 2).Formula = "=IFERROR(C" & firstValueRow & "/D" & firstValueRow & ", 0)" ' Medicare System Repriced (C/D)
+    wsPivot.Cells(firstValueRow, pt.TableRange2.Columns.Count + 3).Formula = "=IFERROR(F" & firstValueRow & "/G" & firstValueRow & ", 0)" ' Contract Office Repriced (F/G)
+
+    ' Copy the formulas down to the last row of the pivot table
+    For i = 1 To 3
+        wsPivot.Cells(firstValueRow, pt.TableRange2.Columns.Count + i).Resize(lastRow - firstValueRow + 1, 1).FillDown
+    Next i
+
+    ' Format all new columns as percentage
+    With wsPivot.Range( _
+        wsPivot.Cells(firstValueRow, pt.TableRange2.Columns.Count + 1), _
+        wsPivot.Cells(lastRow, pt.TableRange2.Columns.Count + 3))
+        .NumberFormat = "0.00%"
+    End With
+
+    ' Change the background color of row 9 up to the last column of the pivot table
+    With wsPivot.Range(wsPivot.Cells(9, 1), wsPivot.Cells(9, lastCol)).Interior
+        .Color = BLUE_COLOR
+    End With
+
+    ' Add text to H8, wrap it, center it, and set font size to 9
+    With wsPivot.Cells(8, 8)
+        .Value = "**repriced_allowed divided by total_allowed**"
+        .WrapText = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .Font.Size = 9
+    End With
+
+    ' Add text to I8, wrap it, center it, and set font size to 9
+    With wsPivot.Cells(8, 9) ' I8
+        .Value = "**repriced_allowed divided by repriced_medicare_allowed**"
+        .WrapText = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .Font.Size = 9
+    End With
+
+    ' Add text to J8, wrap it, center it, and set font size to 9
+    With wsPivot.Cells(8, 10) ' J8
+        .Value = "**con_office_repr_allowed divided by con_office_medicare_allowed**"
+        .WrapText = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .Font.Size = 9
+    End With
+
+    ' Hide columns D to G
+    With wsPivot
+        .Columns("D:G").ColumnWidth = 0
+        .Columns(pt.TableRange2.Columns.Count + 1).ColumnWidth = 30 ' Ensure new columns are visible
+    End With
+
+End Sub
+
+
+
