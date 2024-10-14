@@ -1,0 +1,19 @@
+ Private Sub Workbook_Open()
+    Dim wsData As Worksheet
+    Dim lastRow As Long
+    
+    ' Reference the DataSheet
+    Set wsData = ThisWorkbook.Sheets("DataSheet")
+    
+    ' Find the last used row in the DataSheet (ignores headers)
+    lastRow = wsData.Cells(wsData.Rows.Count, "A").End(xlUp).Row
+    
+    ' If the last row is <= 1, it means there's no data (just headers or empty sheet)
+    If lastRow <= 1 Then
+        MsgBox "No data found in the DataSheet. Pivot Table creation skipped."
+    Else
+        ' Call the macro to create or refresh the pivot table if data exists
+        Call CreatePivotTable
+    End If
+End Sub
+
