@@ -13,7 +13,8 @@ def lambda_handler(event, context):
     # Parse JSON data from request body
     try:
         body = json.loads(event['body'])  # Extract JSON data from the body
-        data = body['data']  # The actual JSON data to be written
+        data = body.get('data', [])  # The actual JSON data to be written
+        full_report = body.get('full_report', False)  # Check if the user wants a full report
     except (KeyError, TypeError, json.JSONDecodeError):
         return {
             'statusCode': 400,
@@ -50,23 +51,48 @@ def lambda_handler(event, context):
         row_data = [entry.get(header, "") for header in existing_headers]
         ws.append(row_data)
 
-    # Save the updated workbook back to S3
-    try:
-        # Save the workbook to an in-memory buffer
-        output_stream = BytesIO()
-        wb.save(output_stream)
-        output_stream.seek(0)
+    # Check if the full_report flag is set to True
+    if full_report:
+        # Save the updated workbook to S3
+        try:
+            output_stream = BytesIO()
+            wb.save(output_stream)
+            output_stream.seek(0)
 
-        # Upload the updated file back to S3
-        s3_client.put_object(Body=output_stream, Bucket=bucket_name, Key=file_key)
+            # Upload the updated file back to S3
+            s3_client.put_object(Body=output_stream, Bucket=bucket_name, Key=file_key)
 
-    except Exception as e:
-        return {
-            'statusCode': 500,
-            'body': json.dumps(f'Error saving updated Excel file to S3: {str(e)}')
-        }
+            return {
+                'statusCode': 200,
+                'body': json.dumps('Excel file updated and saved to S3 successfully.')
+            }
 
-    return {
-        'statusCode': 200,
-        'body': json.dumps('Excel file updated successfully.')
-    }
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'body': json.dumps(f'Error saving updated Excel file to S3: {str(e)}')
+            }
+
+    else:
+        # Return the updated file directly to the user as a binary stream
+        try:
+            output_stream = BytesIO()
+            wb.save(output_stream)
+            output_stream.seek(0)
+
+            # Return the binary data directly in the response
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'Content-Disposition': 'attachment; filename="updated_file.xlsx"'
+                },
+                'isBase64Encoded': False,  # Set to False since we're returning raw binary data
+                'body': output_stream.getvalue()  # Return the binary content of the Excel file
+            }
+
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'body': json.dumps(f'Error returning updated Excel file: {str(e)}')
+            }
