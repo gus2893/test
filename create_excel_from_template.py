@@ -7,35 +7,35 @@ def write_json_to_xlsm(json_data, template_path, output_path):
     """
     Write JSON data to a new worksheet in a macro-enabled Excel (.xlsm) file.
     """
-    # Convert JSON data to a pandas DataFrame
-    df = pd.json_normalize(json_data)
+    wb = load_workbook(filename=template_path, keep_vba=True)
 
-    # Load the existing macro-enabled workbook
-    wb = load_workbook(template_path, keep_vba=True)
+    # Select the active worksheet (or a specific sheet by name)
+    ws = wb.active
 
-    # Create or select the DataSheet worksheet
-    if "DataSheet" in wb.sheetnames:
-        sheet = wb["DataSheet"]
-    else:
-        sheet = wb.create_sheet("DataSheet")
+    # Read the existing headers from the first row
+    existing_headers = [cell.value for cell in ws[1] if cell.value]  # Only consider non-empty cells in the first row
 
-    # Clear existing data (optional)
-    for row in sheet["A1:Z1000"]:
-        for cell in row:
-            cell.value = None
+    # Collect all the keys (fields) from the JSON data
+    all_keys = set(existing_headers)  # Start with existing headers
 
-    # Write headers
-    for col_idx, header in enumerate(df.columns, start=1):
-        sheet.cell(row=1, column=col_idx, value=header)
+    # Update headers in Excel if there are new keys in the JSON data
+    for entry in json_data:
+        for key in entry.keys():
+            if key not in all_keys:
+                all_keys.add(key)
+                existing_headers.append(key)
+                ws.cell(row=1, column=len(existing_headers)).value = key  # Write new headers starting from column A
 
-    # Write data rows
-    for row_idx, row_data in enumerate(df.values, start=2):
-        for col_idx, value in enumerate(row_data, start=1):
-            sheet.cell(row=row_idx, column=col_idx, value=value)
+    # Append data dynamically based on the updated headers
+    for entry in json_data:
+        # Create the row based on the order of the existing headers
+        row_data = [entry.get(header, "") for header in existing_headers]
+        ws.append(row_data)
 
-    # Save the workbook with macros intact
+    # Save the workbook (this will overwrite the existing file)
     wb.save(output_path)
     print(f"Data successfully written to {output_path}")
+
 
 # Function to generate random integers
 def random_int(min_value, max_value):
