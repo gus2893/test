@@ -89,17 +89,19 @@ def lambda_handler(event, context):
         try:
             output_stream = BytesIO()
             wb.save(output_stream)
-            output_stream.seek(0)
+            output_stream.seek(0)  # Go back to the start of the stream
 
-            # Return the binary data directly in the response
+            encoded_output = base64.b64encode(output_stream.getvalue()).decode('utf-8')
+
+            # Return binary response (no base64 encoding)
             return {
                 'statusCode': 200,
                 'headers': {
-                    'Content-Type': content_type,  # Use the content type variable
-                    'Content-Disposition': f'attachment; filename="{output_file_key}"'
+                    'Content-Type': content_type,  # Set the correct content type for binary Excel file
+                    'Content-Disposition': f'attachment; filename="{output_file_key}"',
                 },
-                'isBase64Encoded': False,  # Set to False since we're returning raw binary data
-                'body': output_stream.getvalue()  # Return the binary content of the Excel file
+                'isBase64Encoded': True,  # Set this to False to indicate raw binary data
+                'body': encoded_output  # Binary data returned as is
             }
 
         except Exception as e:
