@@ -1,0 +1,82 @@
+ADR 1: Migrate JSON Field to Table Columns or New Table
+
+Status
+
+Proposed
+
+Context
+
+Currently, our application stores a complex JSON object within a single column in the database. While this approach offers flexibility in storage, it has the following limitations:
+
+The JSON field is not easily queryable using SQL.
+
+Performance issues arise when filtering or aggregating data within the JSON structure.
+
+Lack of schema enforcement for the JSON object leads to potential data inconsistency.
+
+To improve data accessibility and query performance, we need to decide whether to migrate the JSON field's key-value pairs into:
+
+Separate columns within the same table.
+
+A new normalized table.
+
+Decision
+
+We will migrate the JSON field into a new table with normalized columns.
+
+Reasons:
+
+Improved Query Performance: A normalized table structure allows for efficient indexing and querying, improving the performance of frequently used operations.
+
+Data Integrity: Moving to a table with defined schema constraints ensures data consistency and integrity.
+
+Scalability: A normalized table supports future schema changes (e.g., adding new attributes) without requiring significant refactoring.
+
+Maintainability: Querying and analyzing data will be easier and more maintainable with structured columns compared to a JSON field.
+
+Alternatives Considered
+
+Keep JSON Field:
+
+Pros: No changes required; retains flexibility.
+
+Cons: Poor performance and difficult to query or analyze.
+
+Migrate to Table Columns in the Same Table:
+
+Pros: Simpler structure and avoids creating a new table.
+
+Cons: The main table could grow too large and negatively impact performance.
+
+Migrate to a New Table (Chosen):
+
+Pros: Ensures normalized design, optimized for queries and joins.
+
+Cons: Involves additional complexity in managing relationships between tables.
+
+Consequences
+
+Positive: Query performance and data integrity are significantly improved. Future schema changes will be easier to implement.
+
+Negative: The migration will require development effort, potential downtime, and testing to ensure consistency between the old and new structure.
+
+To minimize downtime, we will use a phased migration approach:
+
+Create the new table and migrate data incrementally.
+
+Update the application code to use the new table.
+
+Remove the old JSON field once the migration is verified.
+
+Decision Owner
+
+Primary Owner: [Team Lead Name or Role]
+
+Date: [Insert Date]
+
+Related Links
+
+Database Normalization Best Practices
+
+JSON vs. Table Performance Analysis
+
