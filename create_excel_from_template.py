@@ -51,23 +51,6 @@ def generate_data(entry_count=10):
 
     for _ in range(entry_count):
         entry = {
-            "system_id": random_int(1000, 9999),
-            "systemname": f"System {random_int(1, 100)}",
-            "facility_entity_id": random_int(5000, 9999),
-            "provider_name": f"Provider {random_int(1, 100)}",
-            "line_of_business": f"Line {random_int(1, 5)}",
-            "contract_office": f"Office {random_int(1, 10)}",
-            "msc_cd": f"MSC{random_int(100, 999)}",
-            "service_major": f"Service {random_int(1, 10)}",
-            "repriced_claim_count": random_int(1, 1000),
-            "repriced_allowed_": random_int(1000, 10000),
-            "repriced_medicare_allowed": random_int(500, 8000),
-            "total_allowed": random_int(2000, 15000),
-            "con_office_repr_allowed": random_int(1000, 12000),
-            "con_offirce_medicare_allowed": random_int(700, 9000),
-            "service_begin_year_month": random_int(202301, 202312),  # YYYYMM format
-            "service_end_year_month": random_int(202401, 202412),  # YYYYMM format
-            "create_timestamp": random_date(datetime(2022, 1, 1), datetime(2024, 12, 31)).isoformat()
         }
         data.append(entry)
 
