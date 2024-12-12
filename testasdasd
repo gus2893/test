@@ -1,8 +1,8 @@
-User Profile Page Documentation
+User Profile and Profile Creation Documentation
 
 Overview
 
-This document outlines the functional requirements, happy path, logic flow, and error handling for the User Profile page of the application.
+This document outlines the functional requirements, happy path, logic flow, and error handling for the User Profile and Profile Creation pages of the application.
 
 User Profile Page
 
@@ -70,14 +70,91 @@ Save Changes: Saving sends the updated data for approval and displays a warning 
 
 Cancel Changes: Cancelling prompts the user if unsaved changes exist; otherwise, it reverts to the original profile page.
 
+Profile Creation Page
+
+Functional Requirements
+
+The Profile Creation page allows new users to:
+
+See a welcome message when first accessing the page.
+
+Navigate to the profile creation form, which mirrors the edit profile page but starts with blank fields.
+
+Save their changes, transitioning to a confirmation view where they can review and finalize their data.
+
+Confirm their data, redirecting them to an unconfirmed dashboard with limited functionality while their profile is approved.
+
+Happy Path
+
+The user logs in for the first time and sees a welcome message.
+
+The user clicks "Next," triggering a backend update to set the welcome variable to true in their profile.
+
+The system navigates the user to the Profile Creation page, displaying a blank form.
+
+The user completes the profile form:
+
+Function Area and Role options are fetched via API and left blank initially.
+
+The user selects a Function Area and Role, populating relevant fields.
+
+The user selects markets as needed.
+
+The user clicks "Save" and is navigated to a confirmation view.
+
+The confirmation view displays the user’s inputs and a message: "You can still make changes if anything is incorrect."
+
+The user chooses to:
+
+Click "Edit," returning to the edit profile page with their current inputs pre-filled.
+
+Click "Confirm," finalizing their data and navigating to the unconfirmed dashboard.
+
+Logic Flow
+
+Welcome Message:
+
+The welcome message is displayed upon first login.
+
+Clicking "Next" updates the backend to set welcome to true and navigates the user to the Profile Creation page.
+
+Profile Creation Form:
+
+Display a blank form for the user to input their details.
+
+Fetch Function Area and Role options via API.
+
+Save Changes:
+
+Save the user’s inputs and navigate to the confirmation view.
+
+Confirmation View:
+
+Display the saved inputs and provide options to edit or confirm.
+
+"Edit" navigates back to the edit profile page with pre-filled current inputs.
+
+"Confirm" redirects to the unconfirmed dashboard, restricting functionality until approval.
+
 Error Handling
 
-Invalid Input: Highlight the invalid field and display an error message (e.g., "Please select a valid market.").
+Unsaved Changes:
 
-Pending Requests: Inform the user with a red message: "Your profile changes are pending approval."
+Prompt: "You have unsaved changes. Do you want to proceed without saving?"
 
-API Failure: Display: "Unable to fetch roles for the selected Function Area. Please try again later."
+Changes we can add
 
-Save Failure: Display: "An error occurred while saving your changes. Please try again later."
+API Failure:
 
-Cancel Unsaved Changes: Prompt: "You have unsaved changes. Do you want to discard them?"
+Display: "Unable to fetch options. Please try again later."
+
+Save Failure:
+
+Display: "An error occurred while saving your profile. Please try again later."
+
+Validation Errors:
+
+Highlight invalid fields and display error messages.
+
+
+
