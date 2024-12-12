@@ -1,82 +1,112 @@
-ADR 1: Migrate JSON Field to Table Columns or New Table
+Schema Design
+1. Main Table (R_Table)
+This is  existing table.
 
-Status
+Columns:
+id: Unique ID for each row (primary key).
+nego_date: Extracted nego_date from the JSON.
+2. System_Info Table
+Represents the first object (system) in the fc_i_ng array.
 
-Proposed
+Columns:
+id: Primary key (can reference R_Table.id as a foreign key or be independent).
+r_id: Foreign key referencing R_Table.id.
+s_i: System ID.
+s_n: System Name.
+3. Feature_Info Table
+Represents each non-system object in the fc_i_ng array.
 
-Context
+Columns:
+id: Primary key.
+r_id: Foreign key referencing R_Table.id.
+e_t_i: Entity Type ID.
+c_o: Company.
+fac_e_i: Facility Entity ID.
+fac_e_n: Facility Entity Name.
+4. Target_Group Table
+Represents each target group object in the arrays (t_g, t_f, t_m).
 
-Currently, our application stores a complex JSON object within a single column in the database. While this approach offers flexibility in storage, it has the following limitations:
+Columns:
+id: Primary key.
+feature_id: Foreign key referencing Feature_Info.id.
+group_type: Indicates whether it's t_g, t_f, or t_m.
+tmc: Target group code.
+tmd: Target group description.
+Workflow
+1. Parse and Insert JSON Data
+You will need to write scripts (e.g., using Python, SQL procedures, or ETL tools) to extract data from the JSON column and populate the normalized tables.
 
-The JSON field is not easily queryable using SQL.
+Extract nego_date from the JSON object and insert into R_Table:
 
-Performance issues arise when filtering or aggregating data within the JSON structure.
+sql
+Copy code
+UPDATE R_Table
+SET nego_date = JSON_EXTRACT(json_column, '$.nego_date');
+Insert system data into System_Info:
 
-Lack of schema enforcement for the JSON object leads to potential data inconsistency.
+sql
+Copy code
+INSERT INTO System_Info (r_id, s_i, s_n)
+SELECT id, 
+       JSON_EXTRACT(json_column, '$.fc_i_ng[0].s_i'),
+       JSON_EXTRACT(json_column, '$.fc_i_ng[0].s_n')
+FROM R_Table;
+Insert non-system data into Feature_Info:
 
-To improve data accessibility and query performance, we need to decide whether to migrate the JSON field's key-value pairs into:
+sql
+Copy code
+INSERT INTO Feature_Info (r_id, e_t_i, c_o, fac_e_i, fac_e_n)
+SELECT id, 
+       JSON_EXTRACT(fc, '$.e_t_i'),
+       JSON_EXTRACT(fc, '$.c_o'),
+       JSON_EXTRACT(fc, '$.fac_e_i'),
+       JSON_EXTRACT(fc, '$.fac_e_n')
+FROM R_Table, JSON_TABLE(json_column, '$.fc_i_ng[*]' COLUMNS(
+         fc JSON PATH '$'
+     )) AS feature_table
+WHERE JSON_EXTRACT(fc, '$.s_i') IS NULL; -- Exclude system objects
+Insert target groups (t_g, t_f, t_m) into Target_Group:
 
-Separate columns within the same table.
+sql
+Copy code
+INSERT INTO Target_Group (feature_id, group_type, tmc, tmd)
+SELECT f.id, 't_g', tg.tmc, tg.tmd
+FROM Feature_Info f
+JOIN JSON_TABLE(f.json_column, '$.t_g[*]' COLUMNS(
+         tmc VARCHAR(255) PATH '$.tmc',
+         tmd VARCHAR(255) PATH '$.tmd'
+     )) AS tg ON f.r_id = tg.r_id;
 
-A new normalized table.
+-- Repeat for `t_f` and `t_m` with 't_f' and 't_m' as `group_type`.
+Queries
+Find Rows with Specific c_o:
+sql
+Copy code
+SELECT r.*
+FROM R_Table r
+JOIN Feature_Info f ON r.id = f.r_id
+WHERE f.c_o = 'specific_company';
+Count Rows with Specific s_i:
+sql
+Copy code
+SELECT COUNT(*)
+FROM R_Table r
+JOIN System_Info s ON r.id = s.r_id
+WHERE s.s_i = 'specific_system_id';
+Count Rows with Specific fac_e_i:
+sql
+Copy code
+SELECT COUNT(*)
+FROM R_Table r
+JOIN Feature_Info f ON r.id = f.r_id
+WHERE f.fac_e_i = 'specific_fac_e_i';
+Advantages of Normalization
+Efficiency: Normalized tables reduce redundancy and make querying relationships easier and faster.
+Flexibility: You can extend the schema for additional properties without modifying existing structure significantly.
+Maintainability: Changes in one part of the schema do not propagate inconsistencies.
+Let me know if you need help with SQL scripts, ETL processes, or tools to automate these steps!
 
-Decision
 
-We will migrate the JSON field into a new table with normalized columns.
 
-Reasons:
 
-Improved Query Performance: A normalized table structure allows for efficient indexing and querying, improving the performance of frequently used operations.
-
-Data Integrity: Moving to a table with defined schema constraints ensures data consistency and integrity.
-
-Scalability: A normalized table supports future schema changes (e.g., adding new attributes) without requiring significant refactoring.
-
-Maintainability: Querying and analyzing data will be easier and more maintainable with structured columns compared to a JSON field.
-
-Alternatives Considered
-
-Keep JSON Field:
-
-Pros: No changes required; retains flexibility.
-
-Cons: Poor performance and difficult to query or analyze.
-
-Migrate to Table Columns in the Same Table:
-
-Pros: Simpler structure and avoids creating a new table.
-
-Cons: The main table could grow too large and negatively impact performance.
-
-Migrate to a New Table (Chosen):
-
-Pros: Ensures normalized design, optimized for queries and joins.
-
-Cons: Involves additional complexity in managing relationships between tables.
-
-Consequences
-
-Positive: Query performance and data integrity are significantly improved. Future schema changes will be easier to implement.
-
-Negative: The migration will require development effort, potential downtime, and testing to ensure consistency between the old and new structure.
-
-To minimize downtime, we will use a phased migration approach:
-
-Create the new table and migrate data incrementally.
-
-Update the application code to use the new table.
-
-Remove the old JSON field once the migration is verified.
-
-Decision Owner
-
-Primary Owner: [Team Lead Name or Role]
-
-Date: [Insert Date]
-
-Related Links
-
-Database Normalization Best Practices
-
-JSON vs. Table Performance Analysis
-
+dont worry about the target_group table we dont need it, its already defined, instead of making a new system_info table can we just add system as a part of the facility info
