@@ -1,0 +1,83 @@
+User Profile Page Documentation
+
+Overview
+
+This document outlines the functional requirements, happy path, logic flow, and error handling for the User Profile page of the application.
+
+User Profile Page
+
+Functional Requirements
+
+The User Profile page allows users to:
+
+View their profile details and settings.
+
+See pending requests if any profile changes are awaiting approval.
+
+Edit specific profile details: Function Area, Role, and Selected Markets.
+
+Save or cancel changes made to their profile.
+
+Happy Path
+
+User logs into the application and clicks the profile icon on the navigation bar.
+
+A dropdown appears; the user selects the profile option, which opens a new window displaying their profile.
+
+The user sees all their current information. If there are pending requests, they see a red warning message and the pending changes instead of their current data.
+
+If the user reverts to their current data, the warning message disappears, and they see their most up-to-date information.
+
+The user enters edit mode where Function Area, Role, and Selected Markets become editable:
+
+Markets are displayed and sorted vertically.
+
+Selecting "Select All" without filtering selects all markets.
+
+Filtering by region and then selecting "Select All" selects only the filtered markets.
+
+Selecting "Select All" overrides all filters to select all markets.
+
+The user enters edit mode, which triggers an API call to fetch all Function Areas and their associated roles in a single request:
+
+The Function Area and Role fields should display the user's current inputs, and the Role field resets to "None" only if the user changes their Function Area.
+
+The user selects a Role from the updated list.
+
+Changing Function Area again clears the Role field.
+
+The user saves their changes, which sends a request and displays the warning message about pending approval.
+
+If the user cancels, the system checks for unsaved changes and prompts the user before discarding.
+
+Logic Flow
+
+Navigation: Clicking the profile icon opens a dropdown leading to the profile page.
+
+Data Fetching: The system fetches user data, including pending requests if applicable.
+
+Display Profile: Current data is displayed unless pending requests exist, in which case pending data is shown.
+
+Edit Mode: The user enters edit mode where:
+
+Function Area and Role options are fetched together in a single API call.
+
+Markets display vertically, with options to filter and select all.
+
+Changes to Function Area reset the Role field.
+
+Save Changes: Saving sends the updated data for approval and displays a warning message.
+
+Cancel Changes: Cancelling prompts the user if unsaved changes exist; otherwise, it reverts to the original profile page.
+
+Error Handling
+
+Invalid Input: Highlight the invalid field and display an error message (e.g., "Please select a valid market.").
+
+Pending Requests: Inform the user with a red message: "Your profile changes are pending approval."
+
+API Failure: Display: "Unable to fetch roles for the selected Function Area. Please try again later."
+
+Save Failure: Display: "An error occurred while saving your changes. Please try again later."
+
+Cancel Unsaved Changes: Prompt: "You have unsaved changes. Do you want to discard them?"
