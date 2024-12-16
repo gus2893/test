@@ -1,112 +1,50 @@
-Schema Design
-1. Main Table (R_Table)
-This is  existing table.
+# ADR: Normalize Renewal data and use `facility_entity` Table as Source for Facility Data
 
-Columns:
-id: Unique ID for each row (primary key).
-nego_date: Extracted nego_date from the JSON.
-2. System_Info Table
-Represents the first object (system) in the fc_i_ng array.
+## Status
+Approved
 
-Columns:
-id: Primary key (can reference R_Table.id as a foreign key or be independent).
-r_id: Foreign key referencing R_Table.id.
-s_i: System ID.
-s_n: System Name.
-3. Feature_Info Table
-Represents each non-system object in the fc_i_ng array.
+## Context
+Initially, our renewal data included facility information stored in a JSON column in our database. While this approach centralized all data into a single table, it presented significant limitations:
+- Querying renewal data became cumbersome and inefficient.
+- Facility data was duplicated, leading to potential inconsistencies.
 
-Columns:
-id: Primary key.
-r_id: Foreign key referencing R_Table.id.
-e_t_i: Entity Type ID.
-c_o: Company.
-fac_e_i: Facility Entity ID.
-fac_e_n: Facility Entity Name.
-4. Target_Group Table
-Represents each target group object in the arrays (t_g, t_f, t_m).
+To resolve these issues, we identified the need to normalize the data, enabling efficient querying of renewals while reducing duplication. During this process, we discovered that the `facility_entity` table, managed externally, already contained the same facility data stored in our JSON column.
 
-Columns:
-id: Primary key.
-feature_id: Foreign key referencing Feature_Info.id.
-group_type: Indicates whether it's t_g, t_f, or t_m.
-tmc: Target group code.
-tmd: Target group description.
-Workflow
-1. Parse and Insert JSON Data
-You will need to write scripts (e.g., using Python, SQL procedures, or ETL tools) to extract data from the JSON column and populate the normalized tables.
+A team meeting was held with **Kurt** and **Brendan** to discuss and seek approval to use the `facility_entity` table as the authoritative source of facility data. This approach would eliminate duplication and improve maintainability.
 
-Extract nego_date from the JSON object and insert into R_Table:
+## Decision
+1. **Use the `facility_entity` table as the source of truth for facility data:**
+   - Instead of storing facility data in a JSON column, we will reference the `facility_entity` table directly.
+   - This ensures data consistency across systems and reduces redundant storage.
 
-sql
-Copy code
-UPDATE R_Table
-SET nego_date = JSON_EXTRACT(json_column, '$.nego_date');
-Insert system data into System_Info:
+2. **Introduce a join table to manage relationships between renewals and facilities:**
+   - A new table will be created to link renewal records with entries in the `facility_entity` table.
+   - This join table will normalize the data and enable efficient querying of renewal and facility relationships.
 
-sql
-Copy code
-INSERT INTO System_Info (r_id, s_i, s_n)
-SELECT id, 
-       JSON_EXTRACT(json_column, '$.fc_i_ng[0].s_i'),
-       JSON_EXTRACT(json_column, '$.fc_i_ng[0].s_n')
-FROM R_Table;
-Insert non-system data into Feature_Info:
+## Consequences
+### Benefits
+- **Improved Query Efficiency:** Renewal data can now be queried directly using relational joins, avoiding the overhead of parsing JSON.
+- **Data Consistency:** Facility data is managed in a single authoritative source (`facility_entity` table), reducing the risk of discrepancies.
+- **Simplified Maintenance:** Normalizing data simplifies schema management and aligns with relational database best practices.
 
-sql
-Copy code
-INSERT INTO Feature_Info (r_id, e_t_i, c_o, fac_e_i, fac_e_n)
-SELECT id, 
-       JSON_EXTRACT(fc, '$.e_t_i'),
-       JSON_EXTRACT(fc, '$.c_o'),
-       JSON_EXTRACT(fc, '$.fac_e_i'),
-       JSON_EXTRACT(fc, '$.fac_e_n')
-FROM R_Table, JSON_TABLE(json_column, '$.fc_i_ng[*]' COLUMNS(
-         fc JSON PATH '$'
-     )) AS feature_table
-WHERE JSON_EXTRACT(fc, '$.s_i') IS NULL; -- Exclude system objects
-Insert target groups (t_g, t_f, t_m) into Target_Group:
+### Trade-offs
+- **Increased Dependency:** The system now depends on the `facility_entity` table's availability and accuracy. Any changes to its schema or data could impact our system.
+- **Migration Effort:** Existing renewal records with embedded facility data will need to be migrated to the new schema.
 
-sql
-Copy code
-INSERT INTO Target_Group (feature_id, group_type, tmc, tmd)
-SELECT f.id, 't_g', tg.tmc, tg.tmd
-FROM Feature_Info f
-JOIN JSON_TABLE(f.json_column, '$.t_g[*]' COLUMNS(
-         tmc VARCHAR(255) PATH '$.tmc',
-         tmd VARCHAR(255) PATH '$.tmd'
-     )) AS tg ON f.r_id = tg.r_id;
+## Implementation Plan
+1. Update the schema to include:
+   - A join table for renewals and `facility_entity` relationships.
+2. Migrate existing renewal data:
+   - Extract facility data from the JSON column and map it to the corresponding entries in the `facility_entity` table.
+3. Refactor application logic to query and store relationships using the join table and `facility_entity` table.
+4. Coordinate with the `facility_entity` table owners to monitor changes and ensure compatibility.
 
--- Repeat for `t_f` and `t_m` with 't_f' and 't_m' as `group_type`.
-Queries
-Find Rows with Specific c_o:
-sql
-Copy code
-SELECT r.*
-FROM R_Table r
-JOIN Feature_Info f ON r.id = f.r_id
-WHERE f.c_o = 'specific_company';
-Count Rows with Specific s_i:
-sql
-Copy code
-SELECT COUNT(*)
-FROM R_Table r
-JOIN System_Info s ON r.id = s.r_id
-WHERE s.s_i = 'specific_system_id';
-Count Rows with Specific fac_e_i:
-sql
-Copy code
-SELECT COUNT(*)
-FROM R_Table r
-JOIN Feature_Info f ON r.id = f.r_id
-WHERE f.fac_e_i = 'specific_fac_e_i';
-Advantages of Normalization
-Efficiency: Normalized tables reduce redundancy and make querying relationships easier and faster.
-Flexibility: You can extend the schema for additional properties without modifying existing structure significantly.
-Maintainability: Changes in one part of the schema do not propagate inconsistencies.
-Let me know if you need help with SQL scripts, ETL processes, or tools to automate these steps!
+## Follow-up
+- Schedule a follow-up review with Kurt and Brendan post-implementation to confirm the new integration aligns with expectations.
+- Monitor system performance and validate data consistency after the migration.
 
+---
 
-
-
-dont worry about the target_group table we dont need it, its already defined, instead of making a new system_info table can we just add system as a part of the facility info
+**Date of Decision:** [Insert Date]  
+**Participants:** Team, Kurt, Brendan  
+**Author:** [Your Name]
