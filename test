@@ -1,50 +1,51 @@
-# ADR: Normalize Renewal data and use `facility_entity` Table as Source for Facility Data
-
-## Status
-Approved
-
-## Context
-Initially, our renewal data included facility information stored in a JSON column in our database. While this approach centralized all data into a single table, it presented significant limitations:
-- Querying renewal data became cumbersome and inefficient.
-- Facility data was duplicated, leading to potential inconsistencies.
-
-To resolve these issues, we identified the need to normalize the data, enabling efficient querying of renewals while reducing duplication. During this process, we discovered that the `facility_entity` table, managed externally, already contained the same facility data stored in our JSON column.
-
-A team meeting was held with **Kurt** and **Brendan** to discuss and seek approval to use the `facility_entity` table as the authoritative source of facility data. This approach would eliminate duplication and improve maintainability.
-
-## Decision
-1. **Use the `facility_entity` table as the source of truth for facility data:**
-   - Instead of storing facility data in a JSON column, we will reference the `facility_entity` table directly.
-   - This ensures data consistency across systems and reduces redundant storage.
-
-2. **Introduce a join table to manage relationships between renewals and facilities:**
-   - A new table will be created to link renewal records with entries in the `facility_entity` table.
-   - This join table will normalize the data and enable efficient querying of renewal and facility relationships.
-
-## Consequences
-### Benefits
-- **Improved Query Efficiency:** Renewal data can now be queried directly using relational joins, avoiding the overhead of parsing JSON.
-- **Data Consistency:** Facility data is managed in a single authoritative source (`facility_entity` table), reducing the risk of discrepancies.
-- **Simplified Maintenance:** Normalizing data simplifies schema management and aligns with relational database best practices.
-
-### Trade-offs
-- **Increased Dependency:** The system now depends on the `facility_entity` table's availability and accuracy. Any changes to its schema or data could impact our system.
-- **Migration Effort:** Existing renewal records with embedded facility data will need to be migrated to the new schema.
-
-## Implementation Plan
-1. Update the schema to include:
-   - A join table for renewals and `facility_entity` relationships.
-2. Migrate existing renewal data:
-   - Extract facility data from the JSON column and map it to the corresponding entries in the `facility_entity` table.
-3. Refactor application logic to query and store relationships using the join table and `facility_entity` table.
-4. Coordinate with the `facility_entity` table owners to monitor changes and ensure compatibility.
-
-## Follow-up
-- Schedule a follow-up review with Kurt and Brendan post-implementation to confirm the new integration aligns with expectations.
-- Monitor system performance and validate data consistency after the migration.
-
----
-
-**Date of Decision:** [Insert Date]  
-**Participants:** Team, Kurt, Brendan  
-**Author:** [Your Name]
+WITH distinct_facilities AS (
+    SELECT DISTINCT ON (fe.facility_entity_id)
+        fe.facility_entity_id,
+        fe.name AS facility_name,
+        fe.contract_office,
+        fe.system,
+        f.has_pathwell,
+        fn.tin
+    FROM amp_renewal_facilities rf
+    INNER JOIN facility_entities fe ON rf.facility_entity_id = fe.facility_entity_id
+    INNER JOIN facilities f ON fe.facility_entity_id = f.facility_entity_id
+    INNER JOIN facility_networks fn ON f.prim_prov_id = fn.prim_prov_id AND fn.tin IS NOT NULL
+    WHERE rf.renewal_id = :renewal_id
+    ORDER BY fe.facility_entity_id
+)
+SELECT
+    r.renewal_id,
+    r.name,
+    r.owner_first_name,
+    r.owner_last_name,
+    r.owner_lan_id,
+    r.next_negotiation_date,
+    r.is_test,
+    r.is_active,
+    r.created_dt,
+    r.update_dt,
+    df.system,
+    jsonb_agg(DISTINCT jsonb_strip_nulls(
+        jsonb_build_object(
+            'facility_entity_id', df.facility_entity_id,
+            'facility_name', df.facility_name,
+            'is_pathwell', df.has_pathwell,
+            'tin', df.tin
+        )
+    )) AS facilities,
+    COALESCE(ARRAY_AGG(DISTINCT df.contract_office) FILTER (WHERE df.contract_office IS NOT NULL), '{}') AS contract_office
+FROM amp_renewal r
+LEFT JOIN distinct_facilities df ON r.renewal_id = :renewal_id
+WHERE r.renewal_id = :renewal_id
+GROUP BY 
+    r.renewal_id,
+    r.name,
+    r.owner_first_name,
+    r.owner_last_name,
+    r.owner_lan_id,
+    r.next_negotiation_date,
+    r.is_test,
+    r.is_active,
+    r.created_dt,
+    r.update_dt,
+    df.system;
