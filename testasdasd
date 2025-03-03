@@ -1,160 +1,119 @@
-User Profile and Profile Creation Documentation
-
-Overview
-
-This document outlines the functional requirements, happy path, logic flow, and error handling for the User Profile and Profile Creation pages of the application.
-
-User Profile Page
-
-Functional Requirements
-
-The User Profile page allows users to:
-
-View their profile details and settings.
-
-See pending requests if any profile changes are awaiting approval.
-
-Edit specific profile details: Function Area, Role, and Selected Markets.
-
-Save or cancel changes made to their profile.
-
-Happy Path
-
-User logs into the application and clicks the profile icon on the navigation bar.
-
-A dropdown appears; the user selects the profile option, which opens a new window displaying their profile.
-
-The user sees all their current information. If there are pending requests, they see a red warning message and the pending changes instead of their current data.
-
-If the user reverts to their current data, the warning message disappears, and they see their most up-to-date information.
-
-The user enters edit mode where Function Area, Role, and Selected Markets become editable:
-
-Markets are displayed and sorted vertically.
-
-Selecting "Select All" without filtering selects all markets.
-
-Filtering by region and then selecting "Select All" selects only the filtered markets.
-
-Selecting "Select All" overrides all filters to select all markets.
-
-The user enters edit mode, which triggers an API call to fetch all Function Areas and their associated roles in a single request:
-
-The Function Area and Role fields should display the user's current inputs, and the Role field resets to "None" only if the user changes their Function Area.
-
-The user selects a Role from the updated list.
-
-Changing Function Area again clears the Role field.
-
-The user saves their changes, which sends a request and displays the warning message about pending approval.
-
-If the user cancels, the system checks for unsaved changes and prompts the user before discarding.
-
-Logic Flow
-
-Navigation: Clicking the profile icon opens a dropdown leading to the profile page.
-
-Data Fetching: The system fetches user data, including pending requests if applicable.
-
-Display Profile: Current data is displayed unless pending requests exist, in which case pending data is shown.
-
-Edit Mode: The user enters edit mode where:
-
-Function Area and Role options are fetched together in a single API call.
-
-Markets display vertically, with options to filter and select all.
-
-Changes to Function Area reset the Role field.
-
-Save Changes: Saving sends the updated data for approval and displays a warning message.
-
-Cancel Changes: Cancelling prompts the user if unsaved changes exist; otherwise, it reverts to the original profile page.
-
-Profile Creation Page
-
-Functional Requirements
-
-The Profile Creation page allows new users to:
-
-See a welcome message when first accessing the page.
-
-Navigate to the profile creation form, which mirrors the edit profile page but starts with blank fields.
-
-Save their changes, transitioning to a confirmation view where they can review and finalize their data.
-
-Confirm their data, redirecting them to an unconfirmed dashboard with limited functionality while their profile is approved.
-
-Happy Path
-
-The user logs in for the first time and sees a welcome message.
-
-The user clicks "Next," triggering a backend update to set the welcome variable to true in their profile.
-
-The system navigates the user to the Profile Creation page, displaying a blank form.
-
-The user completes the profile form:
-
-Function Area and Role options are fetched via API and left blank initially.
-
-The user selects a Function Area and Role, populating relevant fields.
-
-The user selects markets as needed.
-
-The user clicks "Save" and is navigated to a confirmation view.
-
-The confirmation view displays the user’s inputs and a message: "You can still make changes if anything is incorrect."
-
-The user chooses to:
-
-Click "Edit," returning to the edit profile page with their current inputs pre-filled.
-
-Click "Confirm," finalizing their data and navigating to the unconfirmed dashboard.
-
-Logic Flow
-
-Welcome Message:
-
-The welcome message is displayed upon first login.
-
-Clicking "Next" updates the backend to set welcome to true and navigates the user to the Profile Creation page.
-
-Profile Creation Form:
-
-Display a blank form for the user to input their details.
-
-Fetch Function Area and Role options via API.
-
-Save Changes:
-
-Save the user’s inputs and navigate to the confirmation view.
-
-Confirmation View:
-
-Display the saved inputs and provide options to edit or confirm.
-
-"Edit" navigates back to the edit profile page with pre-filled current inputs.
-
-"Confirm" redirects to the unconfirmed dashboard, restricting functionality until approval.
-
-Error Handling
-
-Unsaved Changes:
-
-Prompt: "You have unsaved changes. Do you want to proceed without saving?"
-
-Changes we can add
-
-API Failure:
-
-Display: "Unable to fetch options. Please try again later."
-
-Save Failure:
-
-Display: "An error occurred while saving your profile. Please try again later."
-
-Validation Errors:
-
-Highlight invalid fields and display error messages.
-
-
-
+SELECT DISTINCT
+    ar.renewal_id,
+    ar.name AS renewal_name,
+    ar.data->'author'->>'first_name' AS author_first_name,
+    ar.data->'author'->>'last_name' AS author_last_name,
+    ar.next_negotiation_date,
+    fe.contract_office,
+    fe.system->>'systemid' AS system_id,
+    fe.system->>'systemname' AS system_name,
+    CASE 
+        WHEN EXISTS (
+            SELECT 1 
+            FROM amp_presentation ap 
+            WHERE ap.renewal_id = ar.renewal_id 
+            AND ap.is_active = true
+            AND ap.status = 'In Progress'
+        ) THEN 'In Progress'
+        WHEN EXISTS (
+            SELECT 1 
+            FROM amp_presentation ap 
+            WHERE ap.renewal_id = ar.renewal_id 
+            AND ap.is_active = true
+            AND ap.status = 'Ready'
+        ) THEN 'Ready'
+        WHEN EXISTS (
+            SELECT 1 
+            FROM amp_presentation ap 
+            WHERE ap.renewal_id = ar.renewal_id 
+            AND ap.is_active = true
+            AND ap.status = 'Approved'
+        ) THEN 'Approved'
+        ELSE 'No Active Presentation'
+    END AS presentation_status
+FROM 
+    amp_renewal ar
+JOIN 
+    amp_renewal_facilities arf ON ar.renewal_id = arf.renewal_id
+JOIN 
+    facilities_entities fe ON arf.facility_entity_id = fe.facility_entity_id
+LEFT JOIN 
+    facilities f ON fe.facility_entity_id = f.facility_entity_id
+LEFT JOIN 
+    amp_presentation ap ON ar.renewal_id = ap.renewal_id AND ap.is_active = true
+WHERE 
+    1=1
+    -- Contract Office filter
+    AND (:[contract_office] IS NULL OR fe.contract_office = :[contract_office])
+    
+    -- System ID filter
+    AND (:[system_id] IS NULL OR fe.system->>'systemid' = :[system_id])
+    
+    -- Renewal owner (author) filter
+    AND (
+        :[author_name] IS NULL 
+        OR CONCAT(ar.data->'author'->>'first_name', ' ', ar.data->'author'->>'last_name') ILIKE '%' || :[author_name] || '%'
+    )
+    
+    -- Next negotiation date range filters
+    AND (:[min_negotiation_date] IS NULL OR ar.next_negotiation_date >= :[min_negotiation_date])
+    AND (:[max_negotiation_date] IS NULL OR ar.next_negotiation_date <= :[max_negotiation_date])
+    
+    -- Presentation status filter
+    AND (
+        :[presentation_status] IS NULL
+        OR (
+            :[presentation_status] = 'In Progress' 
+            AND EXISTS (
+                SELECT 1 
+                FROM amp_presentation ap_status 
+                WHERE ap_status.renewal_id = ar.renewal_id 
+                AND ap_status.is_active = true
+                AND ap_status.status = 'In Progress'
+            )
+        )
+        OR (
+            :[presentation_status] = 'Ready' 
+            AND EXISTS (
+                SELECT 1 
+                FROM amp_presentation ap_status 
+                WHERE ap_status.renewal_id = ar.renewal_id 
+                AND ap_status.is_active = true
+                AND ap_status.status = 'Ready'
+            )
+        )
+        OR (
+            :[presentation_status] = 'Approved' 
+            AND EXISTS (
+                SELECT 1 
+                FROM amp_presentation ap_status 
+                WHERE ap_status.renewal_id = ar.renewal_id 
+                AND ap_status.is_active = true
+                AND ap_status.status = 'Approved'
+            )
+        )
+    )
+
+-- Example for your specific use case:
+-- For renewals with negotiation date later than today and presentation status "In Progress" or "Ready":
+-- WHERE ar.next_negotiation_date > CURRENT_DATE
+-- AND (
+--     EXISTS (
+--         SELECT 1 
+--         FROM amp_presentation ap_status 
+--         WHERE ap_status.renewal_id = ar.renewal_id 
+--         AND ap_status.is_active = true
+--         AND ap_status.status = 'In Progress'
+--     )
+--     OR
+--     EXISTS (
+--         SELECT 1 
+--         FROM amp_presentation ap_status 
+--         WHERE ap_status.renewal_id = ar.renewal_id 
+--         AND ap_status.is_active = true
+--         AND ap_status.status = 'Ready'
+--     )
+-- )
+
+ORDER BY 
+    ar.next_negotiation_date;
