@@ -1,19 +1,49 @@
-WITH distinct_market_groups AS (
-  SELECT 
+WITH facility_data AS (
+  SELECT
     fe.systemid,
-    fe.next_negotiation_date,
-    jsonb_array_elements(fe.tf_market_groups) AS market_group
+    fe.name,
+    fe.system, -- JSON object
+    fe.next_negotiation_date::DATE AS next_negotiation_date,
+    fe.tf_market_groups,
+    fe.facility_entity_id
   FROM facilities_entities fe
   LEFT JOIN amp_renewal_facilities arf
     ON fe.facility_entity_id = arf.facility_entity_id
   WHERE arf.renewal_id IS NULL
-    AND fe.systemid != '1'
     AND fe.next_negotiation_date >= CURRENT_DATE
+),
+
+aggregated_data AS (
+  SELECT
+    CASE WHEN systemid = '1' THEN facility_entity_id::text ELSE systemid END AS grouping_key,
+    systemid,
+    CASE 
+      WHEN systemid = '1' THEN name
+      ELSE system->>'systemname'
+    END AS name,
+    system,
+    next_negotiation_date,
+    tf_market_groups
+  FROM facility_data
 )
-SELECT 
+
+SELECT
+  grouping_key AS id,
   systemid,
+  name,
+  system,
   MIN(next_negotiation_date) AS next_negotiation_date,
-  jsonb_agg(DISTINCT market_group) AS tf_market_groups
-FROM distinct_market_groups
-GROUP BY systemid
-ORDER BY next_negotiation_date ASC;
+  CASE
+    WHEN systemid = '1' THEN tf_market_groups -- Individual tf_market_groups
+    ELSE (
+      SELECT jsonb_agg(DISTINCT grp)
+      FROM aggregated_data ad2,
+      jsonb_array_elements(ad2.tf_market_groups) grp
+      WHERE ad2.systemid = aggregated_data.systemid
+        AND ad2.systemid != '1'
+    )
+  END AS tf_market_groups,
+  COUNT(*) OVER() AS total_count
+FROM aggregated_data
+GROUP BY grouping_key, systemid, name, system, tf_market_groups
+ORDER BY next_negotiation_date ASC
