@@ -2,24 +2,18 @@ WITH distinct_market_groups AS (
   SELECT 
     fe.systemid,
     fe.next_negotiation_date,
-    fe.tf_market_groups->>'code' AS code,  -- Extract the code field for uniqueness
-    fe.tf_market_groups->>'name' AS name,  -- Extract the name
-    fe.tf_market_groups->>'co_id' AS co_id,  -- Extract the co_id
-    fe.tf_market_groups
+    jsonb_array_elements(fe.tf_market_groups) AS market_group
   FROM facilities_entities fe
   LEFT JOIN amp_renewal_facilities arf
     ON fe.facility_entity_id = arf.facility_entity_id
-  LEFT JOIN LATERAL jsonb_array_elements(fe.tf_market_groups) AS tfm(market_group)
-    ON true
   WHERE arf.renewal_id IS NULL
     AND fe.systemid != '1'
     AND fe.next_negotiation_date >= CURRENT_DATE
-    AND tfm.market_group->>'code' IS NOT NULL  -- Ensure the code exists
 )
 SELECT 
   systemid,
   MIN(next_negotiation_date) AS next_negotiation_date,
-  jsonb_agg(DISTINCT jsonb_build_object('code', code, 'name', name, 'co_id', co_id)) AS tf_market_groups
+  jsonb_agg(DISTINCT market_group) AS tf_market_groups
 FROM distinct_market_groups
 GROUP BY systemid
 ORDER BY next_negotiation_date ASC;
