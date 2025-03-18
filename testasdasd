@@ -11,42 +11,46 @@ WITH facility_data AS (
   WHERE arf.renewal_id IS NULL
     AND fe.next_negotiation_date >= CURRENT_DATE
 ),
-aggregated_facilities AS (
+individual_facilities AS (
   SELECT
-    CASE WHEN system_id = '1' THEN facility_entity_id::text ELSE system_id END AS id,
+    facility_entity_id::text AS id,
     system_id,
-    CASE
-      WHEN system_id = '1' THEN name
-      ELSE system->>'systemname'
-    END AS name,
+    name,
     system,
-    MIN(next_negotiation_date) AS next_negotiation_date
+    next_negotiation_date,
+    tf_market_groups
   FROM facility_data
-  GROUP BY id, system_id, name, system
+  WHERE system_id = '1'
 ),
-aggregated_tf_market_groups AS (
+grouped_facilities AS (
   SELECT
+    system_id AS id,
     system_id,
-    jsonb_agg(DISTINCT grp) AS tf_market_groups
-  FROM facility_data,
-    jsonb_array_elements(tf_market_groups) AS grp
+    (system->>'systemname') AS name,
+    system,
+    MIN(next_negotiation_date) AS next_negotiation_date,
+    (
+      SELECT jsonb_agg(DISTINCT grp)
+      FROM facility_data fd2, jsonb_array_elements(fd2.tf_market_groups) AS grp
+      WHERE fd2.system_id = fd.system_id
+    ) AS tf_market_groups
+  FROM facility_data fd
   WHERE system_id != '1'
-  GROUP BY system_id
+  GROUP BY system_id, system
+),
+combined AS (
+  SELECT * FROM individual_facilities
+  UNION ALL
+  SELECT * FROM grouped_facilities
 )
-
 SELECT
-  af.id,
-  af.system_id,
-  af.name,
-  af.system,
-  af.next_negotiation_date,
-  CASE
-    WHEN af.system_id = '1' THEN fd.tf_market_groups
-    ELSE ag.tf_market_groups
-  END AS tf_market_groups,
+  id,
+  system_id,
+  name,
+  system,
+  next_negotiation_date,
+  tf_market_groups,
   COUNT(*) OVER() AS total_count
-FROM aggregated_facilities af
-LEFT JOIN aggregated_tf_market_groups ag ON af.system_id = ag.system_id
-LEFT JOIN facility_data fd ON af.system_id = '1' AND af.id = fd.facility_entity_id::text
-ORDER BY af.next_negotiation_date ASC
+FROM combined
+ORDER BY next_negotiation_date ASC
 LIMIT $1 OFFSET $2;
