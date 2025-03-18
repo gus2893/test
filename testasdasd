@@ -1,216 +1,25 @@
--- Recommended Indexes:
--- 1. On amp_renewal:
---    CREATE INDEX idx_amp_renewal_active_name ON amp_renewal(is_active, name);
---    (Assuming renewal_id is the primary key.)
---
--- 2. On amp_renewal_facilities:
---    CREATE INDEX idx_rf_renewal_id ON amp_renewal_facilities(renewal_id);
---    CREATE INDEX idx_rf_facility_entity ON amp_renewal_facilities(facility_entity_id);
---
--- 3. On facilities_entities:
---    CREATE INDEX idx_fe_facility_entity_id ON facilities_entities(facility_entity_id);
---    CREATE INDEX idx_fe_tf_market_groups ON facilities_entities USING GIN(tf_market_groups);
---    CREATE INDEX idx_fe_system_spending_category ON facilities_entities (((system->>'spending_category')));
---    CREATE INDEX idx_fe_contract_office ON facilities_entities(contract_office);
---
--- 4. On facilities:
---    CREATE INDEX idx_f_tax_id_nums ON facilities USING GIN(tax_id_nums);
---
--- 5. On amp_presentation:
---    CREATE INDEX idx_ap_type_status ON amp_presentation(type, status);
---    CREATE INDEX idx_ap_renewal_id ON amp_presentation(renewal_id);
---
--- 6. On amp_renewal_progress:
---    CREATE INDEX idx_ar_renewal_id ON amp_renewal_progress(renewal_id);
-
-WITH matched_renewals AS (
-  SELECT DISTINCT r.renewal_id
-  FROM amp_renewal r
-  LEFT JOIN amp_renewal_facilities rf 
-    ON r.renewal_id = rf.renewal_id
-  LEFT JOIN facilities_entities fe 
-    ON rf.facility_entity_id = fe.facility_entity_id
-  LEFT JOIN facilities f 
-    ON fe.facility_entity_id = f.facility_entity_id
-  WHERE r.is_active = TRUE 
-    AND r.name <> '' 
-    AND (:includeTest::BOOLEAN IS TRUE OR r.is_test IS FALSE)
-    AND (:renewalIds::TEXT[] IS NULL OR r.renewal_id = ANY(:renewalIds))
-    AND (
-         :search::TEXT IS NULL OR :search = '' OR
-         r.name ILIKE '%' || :search || '%' OR
-         r.owner_first_name ILIKE '%' || :search || '%' OR
-         r.owner_last_name ILIKE '%' || :search || '%' OR
-         fe.contract_office ILIKE '%' || :search || '%' OR
-         CAST(r.renewal_id AS TEXT) ILIKE '%' || :search || '%'
-    )
-    -- Exact match filters:
-    AND (:contractOffice IS NULL OR fe.contract_office = ANY(:contractOffice))
-    AND (:tfMarket IS NULL OR EXISTS (
-         SELECT 1 
-         FROM jsonb_array_elements(fe.tf_market_groups) t 
-         WHERE t->>'co_id' = :tfMarket
-    ))
-    AND (:ownerFilter IS NULL OR (
-         r.owner_first_name = :ownerFilter OR
-         r.owner_last_name  = :ownerFilter OR
-         r.owner_lan_id     = :ownerFilter
-    ))
-    AND (:spendingCategory IS NULL OR fe.system->>'spending_category' = :spendingCategory)
-    AND (:tin IS NULL OR EXISTS (
-         SELECT 1
-         FROM amp_renewal_facilities rf2
-         JOIN facilities_entities fe2 
-           ON rf2.facility_entity_id = fe2.facility_entity_id
-         JOIN facilities f2 
-           ON fe2.facility_entity_id = f2.facility_entity_id
-         WHERE rf2.renewal_id = r.renewal_id
-           AND EXISTS (
-             SELECT 1
-             FROM unnest(f2.tax_id_nums) AS tin
-             WHERE tin = :tin
-           )
-    ))
-),
-presentation_filter AS (
-  -- Select renewals that have an Event Plan presentation with a status that matches the input array
-  SELECT DISTINCT renewal_id
-  FROM amp_presentation
-  WHERE type = 'Event Plan'
-    AND (:presentationStatus::TEXT[] IS NULL OR status = ANY(:presentationStatus))
-),
-renewal_spend AS (
-  -- Compute each renewal's spend, ensuring each facility's spend is counted only once
-  SELECT renewal_id,
-         SUM(spend) AS renewal_spend
-  FROM (
-    SELECT DISTINCT r.renewal_id, fe.spend
-    FROM amp_renewal r
-    JOIN amp_renewal_facilities rf 
-      ON r.renewal_id = rf.renewal_id
-    JOIN facilities_entities fe 
-      ON rf.facility_entity_id = fe.facility_entity_id
-    WHERE r.renewal_id IN (SELECT renewal_id FROM matched_renewals)
-  ) sub
-  GROUP BY renewal_id
-),
-overall_spend AS (
-  SELECT SUM(renewal_spend) AS overall_total_spend
-  FROM renewal_spend
-),
-progress_data AS (
-  SELECT renewal_id,
-         JSON_AGG(JSON_BUILD_OBJECT(
-           'progress_id', progress_id,
-           'section_title', section_title,
-           'url', url,
-           'complete', complete,
-           'disabled', disabled
-         )) AS progress
-  FROM amp_renewal_progress
-  GROUP BY renewal_id
-),
-presentation_data AS (
-  SELECT renewal_id,
-         JSON_AGG(JSON_BUILD_OBJECT(
-           'presentation_id', presentation_id,
-           'type', type,
-           'author', author,
-           'presentation_date', presentation_date,
-           'approval_date', approval_date,
-           'status', status
-         )) AS presentations
-  FROM amp_presentation
-  WHERE type = 'Event Plan'
-    AND (:presentationStatus::TEXT[] IS NULL OR status = ANY(:presentationStatus))
-  GROUP BY renewal_id
+WITH distinct_market_groups AS (
+  SELECT 
+    fe.systemid,
+    fe.next_negotiation_date,
+    fe.tf_market_groups->>'code' AS code,  -- Extract the code field for uniqueness
+    fe.tf_market_groups->>'name' AS name,  -- Extract the name
+    fe.tf_market_groups->>'co_id' AS co_id,  -- Extract the co_id
+    fe.tf_market_groups
+  FROM facilities_entities fe
+  LEFT JOIN amp_renewal_facilities arf
+    ON fe.facility_entity_id = arf.facility_entity_id
+  LEFT JOIN LATERAL jsonb_array_elements(fe.tf_market_groups) AS tfm(market_group)
+    ON true
+  WHERE arf.renewal_id IS NULL
+    AND fe.systemid != '1'
+    AND fe.next_negotiation_date >= CURRENT_DATE
+    AND tfm.market_group->>'code' IS NOT NULL  -- Ensure the code exists
 )
 SELECT 
-  r.renewal_id,
-  r.name,
-  r.owner_first_name,
-  r.owner_last_name,
-  r.owner_lan_id,
-  r.next_negotiation_date,
-  r.is_test,
-  r.is_active,
-  r.create_dt,
-  r.update_dt,
-  COALESCE(rs.renewal_spend, 0) AS renewal_spend,
-  os.overall_total_spend,
-  COUNT(DISTINCT fe.facility_entity_id) AS number_of_facilities,
-  -- Correlated subquery for tins from facilities.tax_id_nums (text[] column)
-  (
-    SELECT COALESCE(ARRAY_AGG(DISTINCT tin_val), '{}')
-    FROM (
-      SELECT unnest(f2.tax_id_nums) AS tin_val
-      FROM amp_renewal_facilities rf2
-      JOIN facilities_entities fe2 
-        ON rf2.facility_entity_id = fe2.facility_entity_id
-      JOIN facilities f2 
-        ON fe2.facility_entity_id = f2.facility_entity_id
-      WHERE rf2.renewal_id = r.renewal_id
-    ) t
-  ) AS tins,
-  COALESCE(ARRAY_AGG(DISTINCT fe.contract_office)
-           FILTER (WHERE fe.contract_office IS NOT NULL), '{}') AS contract_offices,
-  -- Correlated subquery for unique tf_market_groups (aggregated by code)
-  (
-    SELECT COALESCE(JSON_AGG(t_value), '[]'::json)
-    FROM (
-      SELECT DISTINCT ON (t->>'code') t AS t_value
-      FROM amp_renewal_facilities rf2
-      JOIN facilities_entities fe2 
-        ON rf2.facility_entity_id = fe2.facility_entity_id
-      CROSS JOIN LATERAL jsonb_array_elements(fe2.tf_market_groups) t
-      WHERE rf2.renewal_id = r.renewal_id
-      ORDER BY t->>'code'
-    ) sub
-  ) AS tf_market_groups,
-  COUNT(*) OVER() AS total_count,
-  (
-    SELECT fe2.system->>'systemname'
-    FROM facilities_entities fe2
-    WHERE fe2.system->>'systemid' = r.system_id
-    LIMIT 1
-  ) AS system_name,
-  (
-    SELECT COALESCE(pd.progress, '[]'::json)
-    FROM progress_data pd
-    WHERE pd.renewal_id = r.renewal_id
-  ) AS progress,
-  (
-    SELECT COALESCE(pres.presentations, '[]'::json)
-    FROM presentation_data pres
-    WHERE pres.renewal_id = r.renewal_id
-  ) AS presentations
-FROM amp_renewal r
-LEFT JOIN renewal_spend rs 
-  ON r.renewal_id = rs.renewal_id
-LEFT JOIN amp_renewal_facilities rf 
-  ON r.renewal_id = rf.renewal_id
-LEFT JOIN facilities_entities fe 
-  ON rf.facility_entity_id = fe.facility_entity_id
-LEFT JOIN facilities f 
-  ON fe.facility_entity_id = f.facility_entity_id
-CROSS JOIN overall_spend os
-WHERE r.renewal_id IN (SELECT renewal_id FROM matched_renewals)
-  AND (
-    (:hasPresentation IS NULL)
-    OR (:hasPresentation = TRUE  AND r.renewal_id IN (SELECT renewal_id FROM presentation_filter))
-    OR (:hasPresentation = FALSE AND r.renewal_id NOT IN (SELECT renewal_id FROM presentation_filter))
-  )
-GROUP BY 
-  r.renewal_id,
-  r.name,
-  r.owner_first_name,
-  r.owner_last_name,
-  r.owner_lan_id,
-  r.next_negotiation_date,
-  r.is_test,
-  r.is_active,
-  r.create_dt,
-  r.update_dt,
-  r.system_id,
-  rs.renewal_spend,
-  os.overall_total_spend;
+  systemid,
+  MIN(next_negotiation_date) AS next_negotiation_date,
+  jsonb_agg(DISTINCT jsonb_build_object('code', code, 'name', name, 'co_id', co_id)) AS tf_market_groups
+FROM distinct_market_groups
+GROUP BY systemid
+ORDER BY next_negotiation_date ASC;
