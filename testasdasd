@@ -1,42 +1,61 @@
 WITH facility_data AS (
   SELECT
-    fe.system_id,
+    fe.system_id::text AS system_id,
     fe.facility_entity_id,
     fe.name,
     fe.system,
+    fe.spending_category,
+    fe.co_id,
     fe.next_negotiation_date::DATE AS next_negotiation_date,
-    fe.tf_market_groups
+    fe.tf_market_groups,
+    CASE WHEN arf.renewal_id IS NULL THEN 1 ELSE 0 END AS no_renewal
   FROM facility_entity fe
-  LEFT JOIN amp_renewal_facilities arf ON fe.facility_entity_id = arf.facility_entity_id
-  WHERE arf.renewal_id IS NULL
-    AND fe.next_negotiation_date >= CURRENT_DATE
+  LEFT JOIN amp_renewal_facilities arf 
+    ON fe.facility_entity_id = arf.facility_entity_id
+  WHERE fe.next_negotiation_date >= CURRENT_DATE
+    -- Hardcoded filter values for testing; remove or modify as needed:
+    AND fe.spending_category = ANY(ARRAY['CategoryA', 'CategoryB'])
+    AND fe.co_id = ANY(ARRAY['123', '456'])
+    AND EXISTS (
+      SELECT 1 
+      FROM jsonb_array_elements(fe.tf_market_groups) grp
+      WHERE grp->>'code' = ANY(ARRAY['MKT1', 'MKT2'])
+    )
 ),
 individual_facilities AS (
+  -- For system_id = '1', return each facility individually.
   SELECT
-    facility_entity_id::text AS id,
+    facility_entity_id AS id,
     system_id,
     name,
     system,
+    spending_category,
     next_negotiation_date,
-    tf_market_groups
+    tf_market_groups,
+    1 AS total_facilities,
+    no_renewal AS facilities_without_renewal
   FROM facility_data
   WHERE system_id = '1'
 ),
 grouped_facilities AS (
+  -- For systems other than '1', group by system_id.
   SELECT
     system_id AS id,
     system_id,
     (system->>'systemname') AS name,
     system,
+    spending_category,
     MIN(next_negotiation_date) AS next_negotiation_date,
     (
       SELECT jsonb_agg(DISTINCT grp)
       FROM facility_data fd2, jsonb_array_elements(fd2.tf_market_groups) AS grp
       WHERE fd2.system_id = fd.system_id
-    ) AS tf_market_groups
+    ) AS tf_market_groups,
+    COUNT(*) AS total_facilities,
+    SUM(no_renewal) AS facilities_without_renewal
   FROM facility_data fd
   WHERE system_id != '1'
-  GROUP BY system_id, system
+  GROUP BY system_id, system, spending_category
 ),
 combined AS (
   SELECT * FROM individual_facilities
@@ -48,9 +67,12 @@ SELECT
   system_id,
   name,
   system,
+  spending_category,
   next_negotiation_date,
   tf_market_groups,
+  total_facilities,
+  facilities_without_renewal,
   COUNT(*) OVER() AS total_count
 FROM combined
 ORDER BY next_negotiation_date ASC
-LIMIT $1 OFFSET $2;
+LIMIT 10 OFFSET 0;
