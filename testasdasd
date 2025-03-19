@@ -8,18 +8,23 @@ WITH facility_data AS (
     fe.co_id,
     fe.next_negotiation_date::DATE AS next_negotiation_date,
     fe.tf_market_groups,
-    CASE WHEN arf.renewal_id IS NULL THEN 1 ELSE 0 END AS no_renewal
+    -- Use EXISTS so that each facility is returned once.
+    CASE 
+      WHEN EXISTS (
+        SELECT 1 FROM amp_renewal_facilities arf
+        WHERE arf.facility_entity_id = fe.facility_entity_id
+      ) THEN 0 
+      ELSE 1 
+    END AS no_renewal
   FROM facility_entity fe
-  LEFT JOIN amp_renewal_facilities arf 
-    ON fe.facility_entity_id = arf.facility_entity_id
   WHERE fe.next_negotiation_date >= CURRENT_DATE
-    -- Hardcoded filter values for testing; remove or modify as needed:
-    AND fe.spending_category = ANY(ARRAY['CategoryA', 'CategoryB'])
-    AND fe.co_id = ANY(ARRAY['123', '456'])
+    -- Hardcoded filter values (for testing):
+    AND fe.spending_category = ANY(ARRAY['CategoryA','CategoryB'])
+    AND fe.co_id = ANY(ARRAY['123','456'])
     AND EXISTS (
       SELECT 1 
       FROM jsonb_array_elements(fe.tf_market_groups) grp
-      WHERE grp->>'code' = ANY(ARRAY['MKT1', 'MKT2'])
+      WHERE grp->>'code' = ANY(ARRAY['MKT1','MKT2'])
     )
 ),
 individual_facilities AS (
