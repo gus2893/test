@@ -1,29 +1,5 @@
--- Base data: all facilities for each system (without the additional filters)
-WITH base_data AS (
-  SELECT
-    fe.system_id::text AS system_id,
-    fe.facility_entity_id,
-    fe.next_negotiation_date::DATE AS next_negotiation_date,
-    CASE 
-      WHEN EXISTS (
-        SELECT 1 FROM amp_renewal_facilities arf 
-        WHERE arf.facility_entity_id = fe.facility_entity_id
-      ) THEN 0 ELSE 1 
-    END AS no_renewal
-  FROM facility_entity fe
-  WHERE fe.next_negotiation_date >= CURRENT_DATE
-),
-base_grouped AS (
-  SELECT 
-    system_id,
-    COUNT(*) AS total_facilities_base,
-    SUM(no_renewal) AS facilities_without_renewal_base
-  FROM base_data
-  GROUP BY system_id
-),
-
--- Filtered data: applying your filters on spending_category, co_id, and tf_market_group code
-filtered_data AS (
+-- 1. Base data: all facilities meeting filters (but not filtered by negotiation date)
+WITH base_data_all AS (
   SELECT
     fe.system_id::text AS system_id,
     fe.facility_entity_id,
@@ -35,39 +11,55 @@ filtered_data AS (
     fe.tf_market_groups,
     CASE 
       WHEN EXISTS (
-        SELECT 1 FROM amp_renewal_facilities arf 
+        SELECT 1 FROM amp_renewal_facilities arf
         WHERE arf.facility_entity_id = fe.facility_entity_id
-      ) THEN 0 ELSE 1 
+      ) THEN 0 
+      ELSE 1 
     END AS no_renewal
   FROM facility_entity fe
-  WHERE fe.next_negotiation_date >= CURRENT_DATE
-    -- Hardcoded filter values (for testing); adjust as needed:
-    AND fe.spending_category = ANY(ARRAY['CategoryA','CategoryB'])
+  WHERE 
+    -- Apply your filters (except the negotiation date filter):
+    fe.spending_category = ANY(ARRAY['CategoryA','CategoryB'])
     AND fe.co_id = ANY(ARRAY['123','456'])
     AND EXISTS (
-      SELECT 1 
-      FROM jsonb_array_elements(fe.tf_market_groups) grp
+      SELECT 1 FROM jsonb_array_elements(fe.tf_market_groups) grp
       WHERE grp->>'code' = ANY(ARRAY['MKT1','MKT2'])
     )
 ),
 
--- For system_id = '1': return individual rows from the filtered set.
+-- 2. Base counts: total facilities & facilities without renewal per system,
+--    computed on all facilities from base_data_all.
+base_grouped AS (
+  SELECT
+    system_id,
+    COUNT(*) AS total_facilities,
+    SUM(no_renewal) AS facilities_without_renewal
+  FROM base_data_all
+  GROUP BY system_id
+),
+
+-- 3. Display data: only facilities with an upcoming negotiation date.
+display_data AS (
+  SELECT *
+  FROM base_data_all
+  WHERE next_negotiation_date >= CURRENT_DATE
+),
+
+-- 4. For system_id = '1': return individual facilities.
 individual_facilities AS (
   SELECT
-    facility_entity_id AS id,
+    facility_entity_id::text AS id,
     system_id,
     name,
     system,
     spending_category,
     next_negotiation_date,
-    tf_market_groups,
-    1 AS filtered_count,
-    no_renewal AS filtered_no_renewal
-  FROM filtered_data
+    tf_market_groups
+  FROM display_data
   WHERE system_id = '1'
 ),
 
--- For systems other than '1': group the filtered facilities.
+-- 5. For systems other than '1': group the filtered (display) facilities.
 grouped_facilities AS (
   SELECT
     system_id AS id,
@@ -78,35 +70,33 @@ grouped_facilities AS (
     MIN(next_negotiation_date) AS next_negotiation_date,
     (
       SELECT jsonb_agg(DISTINCT grp)
-      FROM filtered_data fd2, jsonb_array_elements(fd2.tf_market_groups) AS grp
-      WHERE fd2.system_id = fd.system_id
-    ) AS tf_market_groups,
-    COUNT(*) AS filtered_count,
-    SUM(no_renewal) AS filtered_no_renewal
-  FROM filtered_data fd
+      FROM display_data dd2, jsonb_array_elements(dd2.tf_market_groups) AS grp
+      WHERE dd2.system_id = dd.system_id
+    ) AS tf_market_groups
+  FROM display_data dd
   WHERE system_id != '1'
   GROUP BY system_id, system, spending_category
 ),
 
-combined_filtered AS (
+-- 6. Combine the individual and grouped display results.
+combined AS (
   SELECT * FROM individual_facilities
   UNION ALL
   SELECT * FROM grouped_facilities
 )
 
--- Final SELECT: join the filtered results with the base aggregated counts.
 SELECT
-  cf.id,
-  cf.system_id,
-  cf.name,
-  cf.system,
-  cf.spending_category,
-  cf.next_negotiation_date,
-  cf.tf_market_groups,
-  bd.total_facilities_base AS total_facilities,
-  bd.facilities_without_renewal_base AS facilities_without_renewal,
+  c.id,
+  c.system_id,
+  c.name,
+  c.system,
+  c.spending_category,
+  c.next_negotiation_date,
+  c.tf_market_groups,
+  bg.total_facilities,
+  bg.facilities_without_renewal,
   COUNT(*) OVER() AS total_count
-FROM combined_filtered cf
-LEFT JOIN base_grouped bd ON cf.system_id = bd.system_id
-ORDER BY cf.next_negotiation_date ASC
+FROM combined c
+LEFT JOIN base_grouped bg ON c.system_id = bg.system_id
+ORDER BY c.next_negotiation_date ASC
 LIMIT 10 OFFSET 0;
