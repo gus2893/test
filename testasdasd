@@ -1,4 +1,29 @@
-WITH facility_data AS (
+-- Base data: all facilities for each system (without the additional filters)
+WITH base_data AS (
+  SELECT
+    fe.system_id::text AS system_id,
+    fe.facility_entity_id,
+    fe.next_negotiation_date::DATE AS next_negotiation_date,
+    CASE 
+      WHEN EXISTS (
+        SELECT 1 FROM amp_renewal_facilities arf 
+        WHERE arf.facility_entity_id = fe.facility_entity_id
+      ) THEN 0 ELSE 1 
+    END AS no_renewal
+  FROM facility_entity fe
+  WHERE fe.next_negotiation_date >= CURRENT_DATE
+),
+base_grouped AS (
+  SELECT 
+    system_id,
+    COUNT(*) AS total_facilities_base,
+    SUM(no_renewal) AS facilities_without_renewal_base
+  FROM base_data
+  GROUP BY system_id
+),
+
+-- Filtered data: applying your filters on spending_category, co_id, and tf_market_group code
+filtered_data AS (
   SELECT
     fe.system_id::text AS system_id,
     fe.facility_entity_id,
@@ -8,17 +33,15 @@ WITH facility_data AS (
     fe.co_id,
     fe.next_negotiation_date::DATE AS next_negotiation_date,
     fe.tf_market_groups,
-    -- Use EXISTS so that each facility is returned once.
     CASE 
       WHEN EXISTS (
-        SELECT 1 FROM amp_renewal_facilities arf
+        SELECT 1 FROM amp_renewal_facilities arf 
         WHERE arf.facility_entity_id = fe.facility_entity_id
-      ) THEN 0 
-      ELSE 1 
+      ) THEN 0 ELSE 1 
     END AS no_renewal
   FROM facility_entity fe
   WHERE fe.next_negotiation_date >= CURRENT_DATE
-    -- Hardcoded filter values (for testing):
+    -- Hardcoded filter values (for testing); adjust as needed:
     AND fe.spending_category = ANY(ARRAY['CategoryA','CategoryB'])
     AND fe.co_id = ANY(ARRAY['123','456'])
     AND EXISTS (
@@ -27,8 +50,9 @@ WITH facility_data AS (
       WHERE grp->>'code' = ANY(ARRAY['MKT1','MKT2'])
     )
 ),
+
+-- For system_id = '1': return individual rows from the filtered set.
 individual_facilities AS (
-  -- For system_id = '1', return each facility individually.
   SELECT
     facility_entity_id AS id,
     system_id,
@@ -37,13 +61,14 @@ individual_facilities AS (
     spending_category,
     next_negotiation_date,
     tf_market_groups,
-    1 AS total_facilities,
-    no_renewal AS facilities_without_renewal
-  FROM facility_data
+    1 AS filtered_count,
+    no_renewal AS filtered_no_renewal
+  FROM filtered_data
   WHERE system_id = '1'
 ),
+
+-- For systems other than '1': group the filtered facilities.
 grouped_facilities AS (
-  -- For systems other than '1', group by system_id.
   SELECT
     system_id AS id,
     system_id,
@@ -53,31 +78,35 @@ grouped_facilities AS (
     MIN(next_negotiation_date) AS next_negotiation_date,
     (
       SELECT jsonb_agg(DISTINCT grp)
-      FROM facility_data fd2, jsonb_array_elements(fd2.tf_market_groups) AS grp
+      FROM filtered_data fd2, jsonb_array_elements(fd2.tf_market_groups) AS grp
       WHERE fd2.system_id = fd.system_id
     ) AS tf_market_groups,
-    COUNT(*) AS total_facilities,
-    SUM(no_renewal) AS facilities_without_renewal
-  FROM facility_data fd
+    COUNT(*) AS filtered_count,
+    SUM(no_renewal) AS filtered_no_renewal
+  FROM filtered_data fd
   WHERE system_id != '1'
   GROUP BY system_id, system, spending_category
 ),
-combined AS (
+
+combined_filtered AS (
   SELECT * FROM individual_facilities
   UNION ALL
   SELECT * FROM grouped_facilities
 )
+
+-- Final SELECT: join the filtered results with the base aggregated counts.
 SELECT
-  id,
-  system_id,
-  name,
-  system,
-  spending_category,
-  next_negotiation_date,
-  tf_market_groups,
-  total_facilities,
-  facilities_without_renewal,
+  cf.id,
+  cf.system_id,
+  cf.name,
+  cf.system,
+  cf.spending_category,
+  cf.next_negotiation_date,
+  cf.tf_market_groups,
+  bd.total_facilities_base AS total_facilities,
+  bd.facilities_without_renewal_base AS facilities_without_renewal,
   COUNT(*) OVER() AS total_count
-FROM combined
-ORDER BY next_negotiation_date ASC
+FROM combined_filtered cf
+LEFT JOIN base_grouped bd ON cf.system_id = bd.system_id
+ORDER BY cf.next_negotiation_date ASC
 LIMIT 10 OFFSET 0;
