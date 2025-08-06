@@ -1,140 +1,83 @@
-Skip to content
-Chat history
+// InfiniteSetFilterBody.tsx
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { ISetFilterParams, SetFilterValuesFuncParams } from 'ag-grid-community';
+import { FixedSizeList as List, ListOnScrollProps } from 'react-window';
 
-You said:
-how would you create a paginated scroll filter for a react ag grid column
-ChatGPT said:
-
-Thought for 44 seconds
-AG Grid’s built-in Set Filter doesn’t natively support paginated or infinite-scroll loading of the filter list—you either get all values at once or you supply them asynchronously in one go via filterParams.values 
-ag-grid.com
-. To get true “load more on scroll” behavior, you need to build a custom filter component in React that:
-
-Manages its own paging state (current page, page size, total items).
-
-Fetches each page of options from your API as the user scrolls.
-
-Implements AG Grid’s filter interface (isFilterActive, doesFilterPass, getModel, setModel, etc.) so the grid knows when and how to filter rows 
-ag-grid.com
-.
-
-1. Create the React filter component
-import React, { useState, useEffect, useRef, useImperativeHandle, forwardRef, useCallback } from 'react';
-
-interface PaginatedFilterProps {
-  filterParams: { pageSize: number };
-  valueGetter: (node: any) => string;
-  filterChangedCallback: () => void;
+interface InfiniteSetFilterBodyProps {
+  params: ISetFilterParams & { pageSize: number };
 }
 
-const PaginatedFilter = forwardRef((props: PaginatedFilterProps, ref) => {
-  const { pageSize } = props.filterParams;
-  const [options, setOptions] = useState<Array<{ value: string; label: string }>>([]);
+const InfiniteSetFilterBody: React.FC<InfiniteSetFilterBodyProps> = ({ params }) => {
+  const { api, column, filterModel, filterChangedCallback, pageSize } = params;
+  const [options, setOptions] = useState<any[]>([]);
   const [page, setPage] = useState(0);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [hasMore, setHasMore] = useState(true);
-  const loader = useRef<HTMLDivElement>(null);
+  const [totalCount, setTotalCount] = useState(Infinity);
+  const listRef = useRef<List>(null);
 
-  // Fetch one page of options
+  // Fetch a page of values
   const loadPage = useCallback(() => {
-    fetch(`/api/filterOptions?col=${props.valueGetter.name}&page=${page}&limit=${pageSize}`)
-      .then(r => r.json())
-      .then(({ items, totalCount }) => {
-        setOptions(prev => [...prev, ...items]);
-        if ((page + 1) * pageSize >= totalCount) setHasMore(false);
+    fetch(`/api/${column.getColId()}/values?page=${page}&size=${pageSize}`)
+      .then(res => res.json())
+      .then(({ values, total }) => {
+        setOptions(prev => [...prev, ...values]);
+        setTotalCount(total);
       });
-  }, [page, pageSize, props.valueGetter]);
+  }, [column, page, pageSize]);
 
   useEffect(() => { loadPage(); }, [loadPage]);
 
-  // Observe the “loader” div to trigger next page
-  useEffect(() => {
-    if (!loader.current || !hasMore) return;
-    const obs = new IntersectionObserver(entries => {
-      if (entries[0].isIntersecting) setPage(p => p + 1);
-    }, { root: loader.current.parentElement, threshold: 1.0 });
-    obs.observe(loader.current);
-    return () => obs.disconnect();
-  }, [hasMore]);
+  // When the user scrolls near the bottom, bump page
+  const onScroll = ({ scrollOffset, scrollHeight, clientHeight }: ListOnScrollProps & any) => {
+    if (scrollOffset + clientHeight >= scrollHeight - 5 && options.length < totalCount) {
+      setPage(p => p + 1);
+    }
+  };
 
-  // AG Grid filter interface
-  useImperativeHandle(ref, () => ({
-    // Active if any option is selected
-    isFilterActive: () => selected.size > 0,
-    // Test each row against selected values
-    doesFilterPass: params => selected.has(props.valueGetter(params.node)),
-    // What AG Grid will store/apply
-    getModel: () => selected.size ? { values: Array.from(selected) } : null,
-    // When restoring filter state
-    setModel: model => {
-      setSelected(new Set(model?.values || []));
-    },
-    // No special focus handling needed
-    afterGuiAttached: () => {}
-  }));
+  // Helpers to read/update the filter model
+  const isSelected = (val: any) =>
+    Array.isArray(filterModel?.values) && filterModel.values.includes(val);
 
-  const onToggle = (val: string) => {
-    setSelected(s => {
-      const next = new Set(s);
-      next.has(val) ? next.delete(val) : next.add(val);
-      return next;
+  const toggle = (val: any) => {
+    const newValues = isSelected(val)
+      ? filterModel.values.filter((v: any) => v !== val)
+      : [...(filterModel.values || []), val];
+
+    api.getFilterInstance(column, (inst: any) => {
+      inst.setModel({ values: newValues });
+      api.onFilterChanged();
     });
-    props.filterChangedCallback();
+    filterChangedCallback();
   };
 
   return (
-    <div style={{ height: '200px', overflow: 'auto' }}>
-      {options.map(opt => (
-        <label key={opt.value} style={{ display: 'block' }}>
-          <input
-            type="checkbox"
-            checked={selected.has(opt.value)}
-            onChange={() => onToggle(opt.value)}
-          />{' '}
-          {opt.label}
-        </label>
-      ))}
-      {hasMore && <div ref={loader} style={{ height: '1px' }} />}
-    </div>
+    <List
+      height={200}
+      width="100%"
+      itemCount={options.length + (options.length < totalCount ? 1 : 0)}
+      itemSize={30}
+      onScroll={onScroll}
+      ref={listRef}
+    >
+      {({ index, style }) => {
+        if (index >= options.length) {
+          return <div style={style}>Loading…</div>;
+        }
+        const val = options[index];
+        return (
+          <div style={style}>
+            <label>
+              <input
+                type="checkbox"
+                checked={isSelected(val)}
+                onChange={() => toggle(val)}
+              />{' '}
+              {val}
+            </label>
+          </div>
+        );
+      }}
+    </List>
   );
-});
-We fetch page 0 on mount, then increment page whenever the “loader” sentinel scrolls into view 
-ag-grid.com
-.
+};
 
-isFilterActive/doesFilterPass let AG Grid know when to include a row.
-
-getModel/setModel handle serializing and restoring the filter state.
-
-2. Hook it into your column definition
-<AgGridReact
-  columnDefs={[
-    {
-      field: 'status',
-      headerName: 'Status',
-      filter: PaginatedFilter,            // use our custom component
-      filterParams: { pageSize: 50 },     // number of options per “page”
-      valueGetter: node => node.data.status // how to extract the raw value
-    },
-    /* other columns… */
-  ]}
-  /* other grid props… */
-/>
-By specifying filter: PaginatedFilter, AG Grid will render your component in the column’s filter popup.
-
-filterParams.pageSize controls how many options you fetch per request.
-
-3. Benefits & tweaks
-Server-side heavy lists: You never load thousands of values at once—just what’s needed for the current viewport.
-
-Easy to extend: Add a “mini-filter” search box above the list and re-query your endpoint with a search parameter.
-
-Styling & virtualization: Swap the plain scroll+IntersectionObserver for a virtualized list (e.g. react-window) if you want smooth performance on very large option sets.
-
-This pattern gives you full control over pagination, searching, and rendering within the filter UI—exactly what you need for a “paginated scroll” experience in React + AG Grid.
-
-
-
-
-No file chosenNo file chosen
-ChatGPT can make mistakes. Check important info.
+export default InfiniteSetFilterBody;
