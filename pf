@@ -1,83 +1,26 @@
-// InfiniteSetFilterBody.tsx
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ISetFilterParams, SetFilterValuesFuncParams } from 'ag-grid-community';
-import { FixedSizeList as List, ListOnScrollProps } from 'react-window';
+import { InfiniteLoader, FixedSizeList as List } from 'react-window';
 
-interface InfiniteSetFilterBodyProps {
-  params: ISetFilterParams & { pageSize: number };
-}
-
-const InfiniteSetFilterBody: React.FC<InfiniteSetFilterBodyProps> = ({ params }) => {
-  const { api, column, filterModel, filterChangedCallback, pageSize } = params;
-  const [options, setOptions] = useState<any[]>([]);
-  const [page, setPage] = useState(0);
-  const [totalCount, setTotalCount] = useState(Infinity);
-  const listRef = useRef<List>(null);
-
-  // Fetch a page of values
-  const loadPage = useCallback(() => {
-    fetch(`/api/${column.getColId()}/values?page=${page}&size=${pageSize}`)
-      .then(res => res.json())
-      .then(({ values, total }) => {
-        setOptions(prev => [...prev, ...values]);
-        setTotalCount(total);
-      });
-  }, [column, page, pageSize]);
-
-  useEffect(() => { loadPage(); }, [loadPage]);
-
-  // When the user scrolls near the bottom, bump page
-  const onScroll = ({ scrollOffset, scrollHeight, clientHeight }: ListOnScrollProps & any) => {
-    if (scrollOffset + clientHeight >= scrollHeight - 5 && options.length < totalCount) {
-      setPage(p => p + 1);
-    }
-  };
-
-  // Helpers to read/update the filter model
-  const isSelected = (val: any) =>
-    Array.isArray(filterModel?.values) && filterModel.values.includes(val);
-
-  const toggle = (val: any) => {
-    const newValues = isSelected(val)
-      ? filterModel.values.filter((v: any) => v !== val)
-      : [...(filterModel.values || []), val];
-
-    api.getFilterInstance(column, (inst: any) => {
-      inst.setModel({ values: newValues });
-      api.onFilterChanged();
-    });
-    filterChangedCallback();
-  };
-
-  return (
+<InfiniteLoader
+  isItemLoaded={i => i < options.length}
+  itemCount={totalCount}            // total items on the server
+  loadMoreItems={() => setPage(p => p + 1)}
+>
+  {({ onItemsRendered, ref }) => (
     <List
       height={200}
       width="100%"
-      itemCount={options.length + (options.length < totalCount ? 1 : 0)}
+      itemCount={options.length + 1}  // +1 for the loader row
       itemSize={30}
-      onScroll={onScroll}
-      ref={listRef}
+      onItemsRendered={onItemsRendered}
+      ref={ref}
     >
       {({ index, style }) => {
         if (index >= options.length) {
           return <div style={style}>Loading…</div>;
         }
         const val = options[index];
-        return (
-          <div style={style}>
-            <label>
-              <input
-                type="checkbox"
-                checked={isSelected(val)}
-                onChange={() => toggle(val)}
-              />{' '}
-              {val}
-            </label>
-          </div>
-        );
+        // …render checkbox…
       }}
     </List>
-  );
-};
-
-export default InfiniteSetFilterBody;
+  )}
+</InfiniteLoader>
