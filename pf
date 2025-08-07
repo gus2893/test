@@ -1,54 +1,130 @@
+// InfiniteFilterBody.tsx
 import React, { useState, useEffect, useRef } from 'react';
+import { ISetFilterParams } from 'ag-grid-community';
 
-export default function InfiniteFilterBody({ pageSize, params }) {
-  const [options, setOptions] = useState([]);
-  const [page, setPage]     = useState(0);
-  const [hasMore, setHasMore] = useState(true);
+type ApiResponse = { values: string[]; total: number };
+
+const InfiniteFilterBody: React.FC<ISetFilterParams> = (props) => {
+  const { api, column, filterChangedCallback, filterParams, filterModel } = props;
+  const pageSize = filterParams.pageSize ?? 50;
+  const colId    = column.getColId();
+
+  // → our paged-in values
+  const [options, setOptions]     = useState<string[]>([]);
+  const [offset, setOffset]       = useState(0);
+  const [totalCount, setTotalCount] = useState<number>(Infinity);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const sentinelRef  = useRef<HTMLDivElement>(null);
 
+  // 1) page in values
   useEffect(() => {
-    fetch(`/api/${params.column.getColId()}/values?page=${page}&size=${pageSize}`)
-      .then(r => r.json())
+    fetch(`/api/${colId}/values?limit=${pageSize}&offset=${offset}`)
+      .then(r => r.json() as Promise<ApiResponse>)
       .then(({ values, total }) => {
-        setOptions(o => [...o, ...values]);
-        if ((page + 1) * pageSize >= total) setHasMore(false);
+        setOptions(prev => {
+          // dedupe in case the API returns some overlap
+          const merged = [...prev, ...values];
+          return Array.from(new Set(merged));
+        });
+        setTotalCount(total);
       });
-  }, [page]);
+  }, [colId, pageSize, offset]);
 
-  // Observe sentinel
+  // 2) bump offset when sentinel scrolls into view
   useEffect(() => {
-    if (!sentinelRef.current || !hasMore) return;
+    const node = sentinelRef.current;
+    if (!node || options.length >= totalCount) return;
     const obs = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setPage(p => p + 1);
-        }
-      },
+      ([e]) => e.isIntersecting && setOffset(o => o + pageSize),
       { root: containerRef.current, threshold: 1 }
     );
-    obs.observe(sentinelRef.current);
+    obs.observe(node);
     return () => obs.disconnect();
-  }, [hasMore]);
+  }, [options.length, totalCount, pageSize]);
 
-  // hook up selections exactly as before...
-  // props.params.filterChangedCallback(), etc.
+  // 3) compute “all selected” vs. explicit
+  const modelValues    = filterModel?.values ?? null;   // null means “all”
+  const isAllSelected  = modelValues === null;
+  const isValueSelected = (v: string) =>
+    modelValues === null || modelValues.includes(v);
+
+  // 4a) Select All / Deselect All handler
+  const onToggleSelectAll = () => {
+    if (!isAllSelected) {
+      // Fetch the **entire** list once, then setModel to that full array
+      fetch(`/api/${colId}/values?limit=${totalCount}&offset=0`)
+        .then(r => r.json() as Promise<ApiResponse>)
+        .then(({ values: allValues }) => {
+          setOptions(allValues); // now our options = full list
+          api.getFilterInstance(colId, inst => {
+            inst.setModel({ values: allValues });
+            api.onFilterChanged();
+          });
+          filterChangedCallback();
+        });
+    } else {
+      // Deselect everything
+      api.getFilterInstance(colId, inst => {
+        inst.setModel({ values: [] });
+        api.onFilterChanged();
+      });
+      filterChangedCallback();
+    }
+  };
+
+  // 4b) Toggle a single value
+  const onToggleOne = (val: string) => {
+    api.getFilterInstance(colId, inst => {
+      const newValues = isAllSelected
+        // “all” → remove this one from the **loaded** list
+        ? options.filter(v => v !== val)
+        // explicit list → add/remove it
+        : modelValues!.includes(val)
+          ? modelValues!.filter(v => v !== val)
+          : [...modelValues!, val];
+
+      inst.setModel({ values: newValues });
+      api.onFilterChanged();
+    });
+    filterChangedCallback();
+  };
 
   return (
     <div
       ref={containerRef}
-      style={{ height: 200, overflowY: 'auto', padding: 4 }}
+      style={{ height: 200, overflowY: 'auto', padding: 8 }}
     >
-      {options.map(opt => (
-        <label key={opt}>
+      {/* Select / Deselect All */}
+      <div style={{ marginBottom: 8 }}>
+        <label>
           <input
             type="checkbox"
-            /* checked/onclick… */
+            checked={isAllSelected}
+            onChange={onToggleSelectAll}
           />{' '}
-          {opt}
+          {isAllSelected ? 'Deselect All Values' : 'Select All Values'}
+        </label>
+      </div>
+
+      {/* Individual options */}
+      {options.map(v => (
+        <label key={v} style={{ display: 'block', marginBottom: 4 }}>
+          <input
+            type="checkbox"
+            checked={isValueSelected(v)}
+            onChange={() => onToggleOne(v)}
+          />{' '}
+          {v}
         </label>
       ))}
-      {hasMore && <div ref={sentinelRef} style={{ height: '1px' }} />}
+
+      {/* scroll‐sentinel for paging */}
+      {options.length < totalCount && (
+        <div ref={sentinelRef} style={{ height: 1 }} />
+      )}
     </div>
   );
-}
+};
+
+export default InfiniteFilterBody;
